@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Amplify } from 'aws-amplify';
 import { Authenticator } from '@aws-amplify/ui-react';
 import { generateClient } from 'aws-amplify/data';
@@ -10,244 +10,568 @@ import outputs from '../../amplify_outputs.json';
 Amplify.configure(outputs);
 const client = generateClient<Schema>();
 
-const TAGS = ['all', 'badminton', 'music', 'dance', 'art', 'gaming'];
+const CATEGORIES: Record<string, { label: string; color: string; bg: string }> = {
+  all: { label: 'All Activities', color: '#e2e8f0', bg: '#1e293b' },
+  badminton: { label: 'Badminton & Sports', color: '#34d399', bg: 'rgba(16, 185, 129, 0.14)' },
+  music: { label: 'Music & Jam', color: '#a78bfa', bg: 'rgba(139, 92, 246, 0.14)' },
+  dance: { label: 'Dance', color: '#f472b6', bg: 'rgba(236, 72, 153, 0.14)' },
+  art: { label: 'Art & Sketching', color: '#fbbf24', bg: 'rgba(245, 158, 11, 0.14)' },
+  gaming: { label: 'Gaming', color: '#38bdf8', bg: 'rgba(14, 165, 233, 0.14)' },
+};
 
-function CampusBoard({ signOut, user }: { signOut?: () => void; user?: { signInDetails?: { loginId?: string } } }) {
-  const [alias, setAlias] = useState('');
+type SessionItem = Schema['Session']['type'];
+type ParticipantItem = Schema['Participant']['type'];
+type MessageItem = Schema['Message']['type'];
+
+function CampusBoard({
+  signOut,
+  user,
+}: {
+  signOut?: () => void;
+  user?: { userId?: string; signInDetails?: { loginId?: string } };
+}) {
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [aliasInput, setAliasInput] = useState('');
   const [savedAlias, setSavedAlias] = useState('');
-  const [selectedTag, setSelectedTag] = useState('all');
-  const [sessions, setSessions] = useState<Schema['Session']['type'][]>([]);
-  const [activeSession, setActiveSession] = useState<Schema['Session']['type'] | null>(null);
-  const [messages, setMessages] = useState<Schema['Message']['type'][]>([]);
-  const [chatInput, setChatInput] = useState('');
 
-  // Form states for new session
+  const [selectedTag, setSelectedTag] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showCreateModal, setShowCreateModal] = useState(false);
+
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [participants, setParticipants] = useState<ParticipantItem[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<MessageItem[]>([]);
+
+  // Form & Room inputs
   const [title, setTitle] = useState('');
   const [tag, setTag] = useState('badminton');
   const [location, setLocation] = useState('');
   const [startsAt, setStartsAt] = useState('Today, 6:00 PM');
   const [maxSpots, setMaxSpots] = useState(4);
+  const [submitting, setSubmitting] = useState(false);
 
+  const [chatInput, setChatInput] = useState('');
+  const [handleInput, setHandleInput] = useState('');
+  const [toast, setToast] = useState<string | null>(null);
+
+  const notify = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  // Load user's saved alias from DynamoDB Profile (fallback to localStorage cache)
   useEffect(() => {
-    const stored = localStorage.getItem('campus_alias');
-    if (stored) setSavedAlias(stored);
+    let mounted = true;
+    async function loadProfile() {
+      try {
+        const cached = localStorage.getItem(`campus_alias_${user?.userId || 'default'}`);
+        if (cached && mounted) {
+          setSavedAlias(cached);
+          setProfileLoading(false);
+          return;
+        }
+        const { data } = await client.models.Profile.list();
+        // Match profile owned by current user if owner field is present
+        const mine = data.find((p) => (p as { owner?: string }).owner?.startsWith(user?.userId || '__none__'));
+        if (mine && mounted) {
+          setSavedAlias(mine.alias);
+          localStorage.setItem(`campus_alias_${user?.userId || 'default'}`, mine.alias);
+        }
+      } finally {
+        if (mounted) setProfileLoading(false);
+      }
+    }
+    loadProfile();
+    return () => {
+      mounted = false;
+    };
+  }, [user?.userId]);
 
-    const sub = client.models.Session.observeQuery().subscribe({
+  // Real-time Sessions & Participants subscriptions
+  useEffect(() => {
+    const subSessions = client.models.Session.observeQuery().subscribe({
       next: ({ items }) => setSessions([...items]),
     });
-    return () => sub.unsubscribe();
+    const subParticipants = client.models.Participant.observeQuery().subscribe({
+      next: ({ items }) => setParticipants([...items]),
+    });
+    return () => {
+      subSessions.unsubscribe();
+      subParticipants.unsubscribe();
+    };
   }, []);
 
+  // Real-time Messages for active room
   useEffect(() => {
-    if (!activeSession) return;
+    if (!activeSessionId) {
+      setMessages([]);
+      return;
+    }
     const sub = client.models.Message.observeQuery({
-      filter: { sessionId: { eq: activeSession.id } },
+      filter: { sessionId: { eq: activeSessionId } },
     }).subscribe({
-      next: ({ items }) => setMessages([...items]),
+      next: ({ items }) => {
+        const sorted = [...items].sort((a, b) =>
+          (a.createdAt || '').localeCompare(b.createdAt || '')
+        );
+        setMessages(sorted);
+      },
     });
     return () => sub.unsubscribe();
-  }, [activeSession]);
+  }, [activeSessionId]);
 
-  const handleSaveAlias = async () => {
-    if (!alias.trim()) return;
-    await client.models.Profile.create({ alias: alias.trim(), interests: [tag] });
-    localStorage.setItem('campus_alias', alias.trim());
-    setSavedAlias(alias.trim());
+  const handleSaveAlias = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleaned = aliasInput.trim().replace(/^@+/, '');
+    if (!cleaned) return;
+    setSubmitting(true);
+    try {
+      await client.models.Profile.create({ alias: cleaned, interests: ['badminton'] });
+      localStorage.setItem(`campus_alias_${user?.userId || 'default'}`, cleaned);
+      setSavedAlias(cleaned);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleCreateSession = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !location.trim()) return;
-    await client.models.Session.create({
-      title: title.trim(),
-      tag,
-      location: location.trim(),
-      startsAt,
-      maxSpots: Number(maxSpots),
-      hostAlias: savedAlias,
-    });
-    setTitle('');
-    setLocation('');
+    setSubmitting(true);
+    try {
+      const { data: created } = await client.models.Session.create({
+        title: title.trim(),
+        tag,
+        location: location.trim(),
+        startsAt: startsAt.trim() || 'Today',
+        maxSpots: Math.max(2, Math.min(30, Number(maxSpots))),
+        hostAlias: savedAlias,
+      });
+      if (created) {
+        await client.models.Participant.create({
+          sessionId: created.id,
+          alias: savedAlias,
+        });
+        setActiveSessionId(created.id);
+      }
+      setTitle('');
+      setLocation('');
+      setShowCreateModal(false);
+      notify('Session posted!');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const handleJoinSession = async (session: Schema['Session']['type']) => {
+  const handleJoinOrOpen = async (session: SessionItem) => {
+    const sessionMembers = participants.filter((p) => p.sessionId === session.id);
+    const alreadyJoined = sessionMembers.some((p) => p.alias === savedAlias);
+
+    if (alreadyJoined) {
+      setActiveSessionId(session.id);
+      return;
+    }
+
+    if (sessionMembers.length >= session.maxSpots) {
+      notify('This session is already full.');
+      return;
+    }
+
     await client.models.Participant.create({
       sessionId: session.id,
       alias: savedAlias,
     });
-    setActiveSession(session);
+    setActiveSessionId(session.id);
+    notify('Spot claimed!');
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim() || !activeSession) return;
-    await client.models.Message.create({
-      sessionId: activeSession.id,
-      senderAlias: savedAlias,
-      body: chatInput.trim(),
-    });
+    if (!chatInput.trim() || !activeSessionId) return;
+    const text = chatInput.trim();
     setChatInput('');
+    await client.models.Message.create({
+      sessionId: activeSessionId,
+      senderAlias: savedAlias,
+      body: text,
+    });
   };
 
-  if (!savedAlias) {
+  const handleShareHandle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!handleInput.trim() || !activeSessionId) return;
+    const myParticipant = participants.find(
+      (p) => p.sessionId === activeSessionId && p.alias === savedAlias
+    );
+    if (!myParticipant) return;
+    await client.models.Participant.update({
+      id: myParticipant.id,
+      revealedHandle: handleInput.trim(),
+    });
+    setHandleInput('');
+    notify('Handle shared with this room.');
+  };
+
+  const filteredSessions = useMemo(() => {
+    return sessions
+      .filter((s) => (selectedTag === 'all' ? true : s.tag === selectedTag))
+      .filter((s) => {
+        if (!searchQuery.trim()) return true;
+        const q = searchQuery.toLowerCase();
+        return (
+          s.title.toLowerCase().includes(q) ||
+          s.location.toLowerCase().includes(q) ||
+          s.hostAlias.toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  }, [sessions, selectedTag, searchQuery]);
+
+  const activeSession = sessions.find((s) => s.id === activeSessionId) || null;
+  const activeMembers = activeSession
+    ? participants.filter((p) => p.sessionId === activeSession.id)
+    : [];
+
+  if (profileLoading) {
     return (
-      <div style={{ maxWidth: 420, margin: '80px auto', padding: 24, background: '#1e293b', borderRadius: 12 }}>
-        <h2>Pick Your Campus Alias</h2>
-        <p style={{ color: '#94a3b8', fontSize: 14 }}>
-          Verified via {user?.signInDetails?.loginId}. Stay pseudonymous until you choose to share your handle.
-        </p>
-        <input
-          value={alias}
-          onChange={(e) => setAlias(e.target.value)}
-          placeholder="e.g. NightOwl_24"
-          style={{ width: '100%', padding: 10, marginTop: 12, borderRadius: 8, border: '1px solid #334155', background: '#0f172a', color: '#fff' }}
-        />
-        <button
-          onClick={handleSaveAlias}
-          style={{ marginTop: 14, width: '100%', padding: 10, borderRadius: 8, background: '#6366f1', color: '#fff', border: 'none', fontWeight: 600, cursor: 'pointer' }}
-        >
-          Enter Campus Board
-        </button>
+      <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', color: '#94a3b8' }}>
+        Loading CampusCrew...
       </div>
     );
   }
 
-  const filtered = selectedTag === 'all' ? sessions : sessions.filter((s) => s.tag === selectedTag);
-
-  return (
-    <div style={{ maxWidth: 820, margin: '0 auto', padding: 24 }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <div>
-          <h1 style={{ margin: 0 }}>CampusCrew</h1>
-          <span style={{ color: '#94a3b8', fontSize: 14 }}>Signed in as @{savedAlias}</span>
-        </div>
-        <button onClick={signOut} style={{ padding: '8px 14px', borderRadius: 8, background: '#334155', color: '#fff', border: 'none', cursor: 'pointer' }}>
-          Sign Out
-        </button>
-      </header>
-
-      {/* Post New Activity */}
-      <form onSubmit={handleCreateSession} style={{ background: '#1e293b', padding: 16, borderRadius: 12, marginBottom: 24, display: 'grid', gap: 10 }}>
-        <strong>Post a Live Activity Session</strong>
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="e.g. Need 2 players for badminton doubles"
-          required
-          style={{ padding: 10, borderRadius: 8, border: '1px solid #334155', background: '#0f172a', color: '#fff' }}
-        />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 90px', gap: 8 }}>
-          <select value={tag} onChange={(e) => setTag(e.target.value)} style={{ padding: 10, borderRadius: 8, background: '#0f172a', color: '#fff', border: '1px solid #334155' }}>
-            {TAGS.filter((t) => t !== 'all').map((t) => (
-              <option key={t} value={t}>#{t}</option>
-            ))}
-          </select>
+  // Onboarding Alias Card
+  if (!savedAlias) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 20 }}>
+        <form
+          onSubmit={handleSaveAlias}
+          style={{
+            width: '100%',
+            maxWidth: 420,
+            background: '#111827',
+            border: '1px solid #1e293b',
+            borderRadius: 16,
+            padding: 28,
+          }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#818cf8', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+            Verified Student Access
+          </div>
+          <h2 style={{ margin: '8px 0 6px', fontSize: 22 }}>Choose your campus alias</h2>
+          <p style={{ margin: '0 0 20px', color: '#94a3b8', fontSize: 14, lineHeight: 1.5 }}>
+            Signed in as <strong style={{ color: '#e2e8f0' }}>{user?.signInDetails?.loginId}</strong>. Your real identity stays hidden until you choose to reveal your handle inside a session.
+          </p>
           <input
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-            placeholder="Location (e.g. Court 2)"
+            value={aliasInput}
+            onChange={(e) => setAliasInput(e.target.value)}
+            placeholder="e.g. NightOwl_24"
+            maxLength={24}
             required
-            style={{ padding: 10, borderRadius: 8, border: '1px solid #334155', background: '#0f172a', color: '#fff' }}
-          />
-          <input
-            value={startsAt}
-            onChange={(e) => setStartsAt(e.target.value)}
-            placeholder="Time"
-            style={{ padding: 10, borderRadius: 8, border: '1px solid #334155', background: '#0f172a', color: '#fff' }}
-          />
-          <input
-            type="number"
-            min={2}
-            max={20}
-            value={maxSpots}
-            onChange={(e) => setMaxSpots(Number(e.target.value))}
-            style={{ padding: 10, borderRadius: 8, border: '1px solid #334155', background: '#0f172a', color: '#fff' }}
-          />
-        </div>
-        <button type="submit" style={{ padding: 10, borderRadius: 8, background: '#6366f1', color: '#fff', border: 'none', fontWeight: 600, cursor: 'pointer' }}>
-          Post Session
-        </button>
-      </form>
-
-      {/* Filter Pills */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        {TAGS.map((t) => (
-          <button
-            key={t}
-            onClick={() => setSelectedTag(t)}
             style={{
-              padding: '6px 14px',
-              borderRadius: 999,
-              border: 'none',
-              cursor: 'pointer',
-              background: selectedTag === t ? '#6366f1' : '#1e293b',
+              width: '100%',
+              padding: '12px 14px',
+              borderRadius: 10,
+              border: '1px solid #334155',
+              background: '#090d16',
+              color: '#f8fafc',
+              fontSize: 15,
+            }}
+          />
+          <button
+            type="submit"
+            disabled={submitting}
+            style={{
+              marginTop: 14,
+              width: '100%',
+              padding: '12px 16px',
+              borderRadius: 10,
+              background: '#6366f1',
               color: '#fff',
+              border: 'none',
+              fontWeight: 600,
+              fontSize: 15,
+              cursor: 'pointer',
             }}
           >
-            {t === 'all' ? 'All' : `#${t}`}
+            {submitting ? 'Saving...' : 'Enter Campus Board'}
           </button>
-        ))}
+        </form>
       </div>
+    );
+  }
 
-      {/* Live Feed */}
-      <div style={{ display: 'grid', gap: 12 }}>
-        {filtered.map((session) => (
-          <div key={session.id} style={{ background: '#1e293b', padding: 16, borderRadius: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <span style={{ fontSize: 12, color: '#818cf8', fontWeight: 600 }}>#{session.tag}</span>
-              <h3 style={{ margin: '4px 0' }}>{session.title}</h3>
-              <div style={{ fontSize: 13, color: '#94a3b8' }}>
-                📍 {session.location} • 🕒 {session.startsAt} • Hosted by @{session.hostAlias} ({session.maxSpots} spots)
-              </div>
-            </div>
-            <button
-              onClick={() => handleJoinSession(session)}
-              style={{ padding: '8px 16px', borderRadius: 8, background: '#10b981', color: '#062c1e', fontWeight: 700, border: 'none', cursor: 'pointer' }}
-            >
-              Join & Chat
-            </button>
-          </div>
-        ))}
-      </div>
-
-      {/* Active Session Micro-Chat */}
-      {activeSession && (
-        <div style={{ marginTop: 24, background: '#1e293b', padding: 16, borderRadius: 12, border: '1px solid #6366f1' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
-            <strong>Room: {activeSession.title}</strong>
-            <button onClick={() => setActiveSession(null)} style={{ background: 'transparent', color: '#94a3b8', border: 'none', cursor: 'pointer' }}>
-              Close
-            </button>
-          </div>
-          <div style={{ maxHeight: 220, overflowY: 'auto', display: 'grid', gap: 8, marginBottom: 12 }}>
-            {messages.map((m) => (
-              <div key={m.id} style={{ background: '#0f172a', padding: 8, borderRadius: 8, fontSize: 14 }}>
-                <strong style={{ color: '#818cf8' }}>@{m.senderAlias}: </strong>
-                <span>{m.body}</span>
-              </div>
-            ))}
-          </div>
-          <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: 8 }}>
-            <input
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              placeholder="Coordinate meetup spot or share handle..."
-              style={{ flex: 1, padding: 10, borderRadius: 8, border: '1px solid #334155', background: '#0f172a', color: '#fff' }}
-            />
-            <button type="submit" style={{ padding: '10px 16px', borderRadius: 8, background: '#6366f1', color: '#fff', border: 'none', fontWeight: 600, cursor: 'pointer' }}>
-              Send
-            </button>
-          </form>
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+      {/* Toast Notification */}
+      {toast && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 20,
+            right: 20,
+            zIndex: 50,
+            background: '#1e293b',
+            border: '1px solid #6366f1',
+            color: '#f8fafc',
+            padding: '10px 16px',
+            borderRadius: 10,
+            fontSize: 14,
+            fontWeight: 500,
+          }}
+        >
+          {toast}
         </div>
       )}
-    </div>
-  );
-}
 
-export default function HomePage() {
-  return (
-    <Authenticator>
-      {({ signOut, user }) => <CampusBoard signOut={signOut} user={user} />}
-    </Authenticator>
-  );
-}
+      {/* Top Navigation Bar */}
+      <nav
+        style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 20,
+          background: 'rgba(9, 13, 22, 0.85)',
+          backdropFilter: 'blur(12px)',
+          borderBottom: '1px solid #1e293b',
+        }}
+      >
+        <div
+          style={{
+            maxWidth: 1120,
+            margin: '0 auto',
+            padding: '14px 20px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 12,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                display: 'grid',
+                placeItems: 'center',
+                fontWeight: 800,
+                fontSize: 16,
+              }}
+            >
+              C
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 17, letterSpacing: '-0.02em' }}>CampusCrew</div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>Verified Campus Activity Board</div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span
+              style={{
+                padding: '6px 12px',
+                borderRadius: 999,
+                background: '#111827',
+                border: '1px solid #1e293b',
+                fontSize: 13,
+                color: '#cbd5e1',
+              }}
+            >
+              @{savedAlias}
+            </span>
+            <button
+              onClick={() => setShowCreateModal(true)}
+              style={{
+                padding: '8px 14px',
+                borderRadius: 9,
+                background: '#6366f1',
+                color: '#fff',
+                border: 'none',
+                fontWeight: 600,
+                fontSize: 13,
+                cursor: 'pointer',
+              }}
+            >
+              + New Session
+            </button>
+            <button
+              onClick={signOut}
+              style={{
+                padding: '8px 12px',
+                borderRadius: 9,
+                background: 'transparent',
+                color: '#94a3b8',
+                border: '1px solid #1e293b',
+                fontSize: 13,
+                cursor: 'pointer',
+              }}
+            >
+              Sign Out
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      {/* Main Content Area */}
+      <main
+        style={{
+          maxWidth: 1120,
+          width: '100%',
+          margin: '0 auto',
+          padding: '24px 20px 60px',
+          display: 'grid',
+          gridTemplateColumns: activeSession ? 'minmax(0, 1.3fr) minmax(320px, 1fr)' : '1fr',
+          gap: 24,
+          alignItems: 'start',
+        }}
+      >
+        {/* Left Column: Filters & Live Activity Feed */}
+        <div>
+          {/* Search + Category Pills */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 20 }}>
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search sessions, locations, or hosts..."
+              style={{
+                width: '100%',
+                padding: '11px 14px',
+                borderRadius: 10,
+                border: '1px solid #1e293b',
+                background: '#111827',
+                color: '#f1f5f9',
+                fontSize: 14,
+              }}
+            />
+
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {Object.entries(CATEGORIES).map(([key, meta]) => {
+                const active = selectedTag === key;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setSelectedTag(key)}
+                    style={{
+                      padding: '7px 14px',
+                      borderRadius: 999,
+                      border: active ? '1px solid #6366f1' : '1px solid #1e293b',
+                      background: active ? 'rgba(99, 102, 241, 0.18)' : '#111827',
+                      color: active ? '#a5b4fc' : '#94a3b8',
+                      fontSize: 13,
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {meta.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Session Cards */}
+          {filteredSessions.length === 0 ? (
+            <div
+              style={{
+                background: '#111827',
+                border: '1px dashed #1e293b',
+                borderRadius: 14,
+                padding: '44px 20px',
+                textAlign: 'center',
+              }}
+            >
+              <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>No live sessions here yet</div>
+              <div style={{ fontSize: 14, color: '#64748b', marginBottom: 16 }}>
+                Start a badminton match, jam session, or gaming lobby for your campus.
+              </div>
+              <button
+                onClick={() => setShowCreateModal(true)}
+                style={{
+                  padding: '9px 16px',
+                  borderRadius: 9,
+                  background: '#6366f1',
+                  color: '#fff',
+                  border: 'none',
+                  fontWeight: 600,
+                  fontSize: 13,
+                  cursor: 'pointer',
+                }}
+              >
+                Post First Session
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: 12 }}>
+              {filteredSessions.map((session) => {
+                const cat = CATEGORIES[session.tag] || CATEGORIES.all;
+                const members = participants.filter((p) => p.sessionId === session.id);
+                const filled = members.length;
+                const isFull = filled >= session.maxSpots;
+                const isJoined = members.some((p) => p.alias === savedAlias);
+                const isSelected = activeSessionId === session.id;
+
+                return (
+                  <div
+                    key={session.id}
+                    style={{
+                      background: '#111827',
+                      border: isSelected ? '1px solid #6366f1' : '1px solid #1e293b',
+                      borderRadius: 14,
+                      padding: 18,
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      gap: 16,
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                        <span
+                          style={{
+                            padding: '3px 10px',
+                            borderRadius: 999,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: cat.color,
+                            background: cat.bg,
+                          }}
+                        >
+                          #{session.tag}
+                        </span>
+                        <span style={{ fontSize: 12, color: '#64748b' }}>
+                          Hosted by @{session.hostAlias}
+                        </span>
+                      </div>
+
+                      <h3 style={{ margin: '0 0 8px', fontSize: 16, fontWeight: 600, color: '#f8fafc' }}>
+                        {session.title}
+                      </h3>
+
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, fontSize: 13, color: '#94a3b8' }}>
+                        <span>Location: {session.location}</span>
+                        <span>Time: {session.startsAt}</span>
+                        <span style={{ color: isFull && !isJoined ? '#f87171' : '#34d399', fontWeight: 600 }}>
+                          {filled}/{session.maxSpots} spots filled
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => handleJoinOrOpen(session)}
+                      disabled={isFull && !isJoined}
+                      style={{
+                        flexShrink: 0,
+                        padding: '9px 16px',
+                        borderRadius: 9,
+                        border: 'none',
+                        fontWeight: 600,
+                        fontSize: 13,
+                        cursor: isFull && !isJoined ? 'not-allowed' : 'pointer',
+                        background: isJoined
+                          ? '#1e293b'
+                          : isFull
+                          ? '#1e293b'
+                          : '#10b981',
+                        color: isJoined ? '#a5b4fc' : isFull
