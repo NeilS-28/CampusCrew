@@ -17,7 +17,9 @@ interface CampusBoardProps {
 
 export default function CampusBoard({ signOut, user }: CampusBoardProps) {
   const [profileLoading, setProfileLoading] = useState(true);
+  const [profileId, setProfileId] = useState<string | null>(null);
   const [savedAlias, setSavedAlias] = useState('');
+  const [isEditingAlias, setIsEditingAlias] = useState(false);
 
   const [selectedTag, setSelectedTag] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -50,6 +52,7 @@ export default function CampusBoard({ signOut, user }: CampusBoardProps) {
           (p) => (p as { owner?: string }).owner?.startsWith(user?.userId || '__none__')
         );
         if (mine && mounted) {
+          setProfileId(mine.id);
           setSavedAlias(mine.alias);
           localStorage.setItem(`campus_alias_${user?.userId || 'default'}`, mine.alias);
         } else if (!cached && mounted) {
@@ -205,8 +208,20 @@ export default function CampusBoard({ signOut, user }: CampusBoardProps) {
     );
   }
 
-  if (!savedAlias) {
-    return <AliasOnboarding user={user} onAliasSaved={(alias) => setSavedAlias(alias)} />;
+  if (!savedAlias || isEditingAlias) {
+    return (
+      <AliasOnboarding
+        user={user}
+        initialAlias={savedAlias}
+        profileId={profileId}
+        onAliasSaved={(alias, newProfileId) => {
+          setSavedAlias(alias);
+          if (newProfileId) setProfileId(newProfileId);
+          setIsEditingAlias(false);
+        }}
+        onCancel={savedAlias ? () => setIsEditingAlias(false) : undefined}
+      />
+    );
   }
 
   return (
@@ -216,6 +231,7 @@ export default function CampusBoard({ signOut, user }: CampusBoardProps) {
       <Navbar
         savedAlias={savedAlias}
         onCreateSession={() => setShowCreateModal(true)}
+        onEditAlias={() => setIsEditingAlias(true)}
         signOut={signOut}
       />
 

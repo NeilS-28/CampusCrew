@@ -3,10 +3,11 @@
 interface NavbarProps {
   savedAlias: string;
   onCreateSession: () => void;
+  onEditAlias: () => void;
   signOut?: () => void;
 }
 
-export default function Navbar({ savedAlias, onCreateSession, signOut }: NavbarProps) {
+export default function Navbar({ savedAlias, onCreateSession, onEditAlias, signOut }: NavbarProps) {
   return (
     <nav
       style={{
@@ -51,18 +52,22 @@ export default function Navbar({ savedAlias, onCreateSession, signOut }: NavbarP
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span
+          <button
+            type="button"
+            onClick={onEditAlias}
+            title="Change campus alias"
             style={{
               padding: '6px 12px',
               borderRadius: 999,
               background: '#111827',
-              border: '1px solid #1e293b',
+              border: '1px solid #334155',
               fontSize: 13,
               color: '#cbd5e1',
+              cursor: 'pointer',
             }}
           >
-            @{savedAlias}
-          </span>
+            @{savedAlias} ✎
+          </button>
           <button
             onClick={onCreateSession}
             style={{

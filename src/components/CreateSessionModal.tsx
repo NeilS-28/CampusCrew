@@ -131,7 +131,6 @@ export default function CreateSessionModal({
               Category
             </label>
             <input
-              list="category-suggestions"
               value={tag}
               onChange={(e) => setTag(e.target.value)}
               placeholder="e.g. badminton, chess, study"
@@ -147,15 +146,6 @@ export default function CreateSessionModal({
                 fontSize: 14,
               }}
             />
-            <datalist id="category-suggestions">
-              {Object.entries(CATEGORIES)
-                .filter(([k]) => k !== 'all')
-                .map(([k, meta]) => (
-                  <option key={k} value={k}>
-                    {meta.label}
-                  </option>
-                ))}
-            </datalist>
           </div>
 
           <div>
