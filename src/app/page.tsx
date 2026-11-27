@@ -574,4 +574,364 @@ function CampusBoard({
                           : isFull
                           ? '#1e293b'
                           : '#10b981',
-                        color: isJoined ? '#a5b4fc' : isFull
+                        color: isJoined ? '#a5b4fc' : isFull ? '#64748b' : '#052e16',
+                      }}
+                    >
+                      {isJoined ? 'Open Room' : isFull ? 'Full' : 'Join Spot'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Right Column: Active Session Micro-Chat & Handle Reveal */}
+        {activeSession && (
+          <aside
+            style={{
+              position: 'sticky',
+              top: 76,
+              background: '#111827',
+              border: '1px solid #1e293b',
+              borderRadius: 14,
+              padding: 18,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 14,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#818cf8', textTransform: 'uppercase' }}>
+                  Session Room
+                </div>
+                <h3 style={{ margin: '4px 0 0', fontSize: 15 }}>{activeSession.title}</h3>
+              </div>
+              <button
+                onClick={() => setActiveSessionId(null)}
+                style={{
+                  background: '#1e293b',
+                  color: '#94a3b8',
+                  border: 'none',
+                  borderRadius: 6,
+                  padding: '4px 9px',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                Close
+              </button>
+            </div>
+
+            {/* Member Pills & Revealed Handles */}
+            <div style={{ background: '#090d16', borderRadius: 10, padding: 10 }}>
+              <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>
+                Members ({activeMembers.length}/{activeSession.maxSpots})
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {activeMembers.map((m) => (
+                  <span
+                    key={m.id}
+                    style={{
+                      fontSize: 12,
+                      padding: '4px 9px',
+                      borderRadius: 999,
+                      background: '#1e293b',
+                      color: '#e2e8f0',
+                    }}
+                  >
+                    @{m.alias}
+                    {m.revealedHandle ? ` (${m.revealedHandle})` : ''}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* Optional Handle Reveal */}
+            <form onSubmit={handleShareHandle} style={{ display: 'flex', gap: 6 }}>
+              <input
+                value={handleInput}
+                onChange={(e) => setHandleInput(e.target.value)}
+                placeholder="Optional: share IG / WhatsApp with room"
+                style={{
+                  flex: 1,
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  border: '1px solid #1e293b',
+                  background: '#090d16',
+                  color: '#f1f5f9',
+                  fontSize: 12,
+                }}
+              />
+              <button
+                type="submit"
+                style={{
+                  padding: '8px 11px',
+                  borderRadius: 8,
+                  background: '#1e293b',
+                  color: '#a5b4fc',
+                  border: 'none',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Reveal
+              </button>
+            </form>
+
+            {/* Message Feed */}
+            <div
+              style={{
+                height: 250,
+                overflowY: 'auto',
+                background: '#090d16',
+                borderRadius: 10,
+                padding: 12,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+              }}
+            >
+              {messages.length === 0 ? (
+                <div style={{ margin: 'auto', fontSize: 13, color: '#64748b', textAlign: 'center' }}>
+                  No messages yet. Coordinate where to meet!
+                </div>
+              ) : (
+                messages.map((m) => {
+                  const isMe = m.senderAlias === savedAlias;
+                  return (
+                    <div
+                      key={m.id}
+                      style={{
+                        alignSelf: isMe ? 'flex-end' : 'flex-start',
+                        maxWidth: '85%',
+                        background: isMe ? '#312e81' : '#1e293b',
+                        padding: '8px 11px',
+                        borderRadius: 10,
+                        fontSize: 13,
+                      }}
+                    >
+                      <div style={{ fontSize: 11, fontWeight: 600, color: isMe ? '#c7d2fe' : '#818cf8', marginBottom: 2 }}>
+                        @{m.senderAlias}
+                      </div>
+                      <div style={{ lineHeight: 1.4 }}>{m.body}</div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Chat Input */}
+            <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: 8 }}>
+              <input
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder="Write a message..."
+                style={{
+                  flex: 1,
+                  padding: '10px 12px',
+                  borderRadius: 9,
+                  border: '1px solid #1e293b',
+                  background: '#090d16',
+                  color: '#f1f5f9',
+                  fontSize: 13,
+                }}
+              />
+              <button
+                type="submit"
+                style={{
+                  padding: '10px 15px',
+                  borderRadius: 9,
+                  background: '#6366f1',
+                  color: '#fff',
+                  border: 'none',
+                  fontWeight: 600,
+                  fontSize: 13,
+                  cursor: 'pointer',
+                }}
+              >
+                Send
+              </button>
+            </form>
+          </aside>
+        )}
+      </main>
+
+      {/* Create Session Modal */}
+      {showCreateModal && (
+        <div
+          onClick={() => setShowCreateModal(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 40,
+            background: 'rgba(0, 0, 0, 0.7)',
+            display: 'grid',
+            placeItems: 'center',
+            padding: 16,
+          }}
+        >
+          <form
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={handleCreateSession}
+            style={{
+              width: '100%',
+              maxWidth: 460,
+              background: '#111827',
+              border: '1px solid #1e293b',
+              borderRadius: 16,
+              padding: 24,
+              display: 'grid',
+              gap: 14,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ margin: 0, fontSize: 18 }}>Post a Live Activity</h3>
+              <button
+                type="button"
+                onClick={() => setShowCreateModal(false)}
+                style={{ background: 'transparent', border: 'none', color: '#94a3b8', fontSize: 18, cursor: 'pointer' }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>Activity Title</label>
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="e.g. Need 2 players for badminton doubles"
+                required
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: 9,
+                  border: '1px solid #334155',
+                  background: '#090d16',
+                  color: '#f1f5f9',
+                  fontSize: 14,
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>Category</label>
+                <select
+                  value={tag}
+                  onChange={(e) => setTag(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: 9,
+                    border: '1px solid #334155',
+                    background: '#090d16',
+                    color: '#f1f5f9',
+                    fontSize: 14,
+                  }}
+                >
+                  {Object.entries(CATEGORIES)
+                    .filter(([k]) => k !== 'all')
+                    .map(([k, meta]) => (
+                      <option key={k} value={k}>
+                        {meta.label}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>Total Spots</label>
+                <input
+                  type="number"
+                  min={2}
+                  max={30}
+                  value={maxSpots}
+                  onChange={(e) => setMaxSpots(Number(e.target.value))}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: 9,
+                    border: '1px solid #334155',
+                    background: '#090d16',
+                    color: '#f1f5f9',
+                    fontSize: 14,
+                  }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>Location</label>
+                <input
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  placeholder="e.g. Indoor Court 2"
+                  required
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: 9,
+                    border: '1px solid #334155',
+                    background: '#090d16',
+                    color: '#f1f5f9',
+                    fontSize: 14,
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>Time</label>
+                <input
+                  value={startsAt}
+                  onChange={(e) => setStartsAt(e.target.value)}
+                  placeholder="e.g. Today, 6:00 PM"
+                  required
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: 9,
+                    border: '1px solid #334155',
+                    background: '#090d16',
+                    color: '#f1f5f9',
+                    fontSize: 14,
+                  }}
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={submitting}
+              style={{
+                marginTop: 4,
+                padding: '11px 16px',
+                borderRadius: 10,
+                background: '#6366f1',
+                color: '#fff',
+                border: 'none',
+                fontWeight: 600,
+                fontSize: 14,
+                cursor: 'pointer',
+              }}
+            >
+              {submitting ? 'Posting...' : 'Publish Session'}
+            </button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <Authenticator>
+      {({ signOut, user }) => <CampusBoard signOut={signOut} user={user} />}
+    </Authenticator>
+  );
+}
