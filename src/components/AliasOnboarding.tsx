@@ -36,17 +36,33 @@ export default function AliasOnboarding({
     setError(null);
     try {
       const { data: existing } = await client.models.Profile.list();
+      const isOwnedByMe = (p: { owner?: string | null }) =>
+        Boolean(user?.userId && p.owner?.startsWith(user.userId));
+
       const taken = existing.some(
-        (p) => p.id !== profileId && p.alias.toLowerCase() === cleaned.toLowerCase()
+        (p) =>
+          p.id !== profileId &&
+          !isOwnedByMe(p as { owner?: string | null }) &&
+          p.alias.toLowerCase() === cleaned.toLowerCase()
       );
       if (taken) {
         setError('This alias is already taken. Try another one.');
         return;
       }
 
-      let savedId = profileId || undefined;
-      if (profileId) {
-        await client.models.Profile.update({ id: profileId, alias: cleaned });
+      const myProfiles = existing.filter((p) => isOwnedByMe(p as { owner?: string | null }));
+      const targetId = profileId || myProfiles[0]?.id || null;
+
+      let savedId = targetId || undefined;
+      if (targetId) {
+        await client.models.Profile.update({ id: targetId, alias: cleaned });
+        // Clean up any duplicate profiles left over for this user
+        const duplicates = myProfiles.filter((p) => p.id !== targetId);
+        if (duplicates.length > 0) {
+          await Promise.allSettled(
+            duplicates.map((d) => client.models.Profile.delete({ id: d.id }))
+          );
+        }
       } else {
         const { data: created } = await client.models.Profile.create({
           alias: cleaned,

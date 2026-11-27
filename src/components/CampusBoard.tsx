@@ -181,7 +181,15 @@ export default function CampusBoard({ signOut, user }: CampusBoardProps) {
           ...roomMembers.map((m) => client.models.Participant.delete({ id: m.id })),
           ...roomMessages.map((msg) => client.models.Message.delete({ id: msg.id })),
         ]);
-        await client.models.Session.delete({ id: sessionId });
+        const { errors } = await client.models.Session.delete({ id: sessionId });
+        if (errors?.length) {
+          console.error('Session delete errors:', errors);
+          notify(errors[0]?.message || 'Failed to delete session.');
+          return;
+        }
+
+        setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+        setParticipants((prev) => prev.filter((p) => p.sessionId !== sessionId));
 
         if (activeSessionId === sessionId) {
           setActiveSessionId(null);
